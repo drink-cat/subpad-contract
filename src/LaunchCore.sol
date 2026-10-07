@@ -82,7 +82,7 @@ contract LaunchCore is
     /// subpadId == 0：费率 0.1%，平台和发币人各 50%。
     /// subpadId != 0：费率 0.15%，平台 40%、发币人 40%、子 pad 20%。
     /// 平台费进本合约，发币人费进 msg.sender。本函数只能由 owner 调用，所以发币人费目前进 owner。
-    function createToken(CreateTokenParams calldata params) public onlyOwner whenNotPaused {
+    function createToken(CreateTokenParams calldata params) public whenNotPaused {
         // 部署项目代币。Token 构造函数把 owner 设为调用方，也就是本合约，后面才能 mint。
         Token token = new Token(params.tokenName, params.tokenSymbol);
         // 总量一次铸进本合约，作为买入时可以转出的库存。
