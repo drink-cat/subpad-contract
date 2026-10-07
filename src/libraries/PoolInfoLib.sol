@@ -9,11 +9,11 @@ library PoolInfoLib {
     using FixedPointMathLib for uint256;
 
     /// 当前曲线价格。
-    /// price = initPrice + sellSum * 0.003
-    /// 0.003 = 30 / 10000。initPrice 和 sellSum 都是 18 位精度，乘完后的价格单位仍是 PRICE_POINT。
+    /// price = initPrice + sellSum * 0.01
+    /// 0.01 = 100 / 10000。initPrice 和 sellSum 都是 18 位精度，乘完后的价格单位仍是 PRICE_POINT。
     /// 净卖出越多价格越高；卖回代币使 sellSum 下降，价格跟着下降。
-    /// 斜率 0.003 是临时值，后续要改。
+    /// 买 1 枚整币（1e18）价格上涨 1%；买 100 枚翻倍。再陡的话，正常买单会把价格打穿。
     function getCurrentPrice(ILaunchCore.PoolInfo storage pool) public view returns (uint256) {
-        return pool.initPrice + pool.sellSum.mulDivDown(30, 10000);
+        return pool.initPrice + pool.sellSum.mulDivDown(200, 10000);
     }
 }

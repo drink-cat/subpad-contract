@@ -122,17 +122,17 @@ contract LaunchCoreFlowTest is Test {
 
         uint256 sellSumAfterBuy = buyTokens;
         uint256 priceAfterBuy = _curvePrice(INIT_PRICE, sellSumAfterBuy);
-        assertEq(priceAfterBuy, 4 ether);
+        assertEq(priceAfterBuy, 11 ether);
         _assertPool(poolId, token, 0, address(0), FEE_RATE_NO_SUBPAD, sellSumAfterBuy);
 
-        uint256 sellTokens = 200 ether;
+        uint256 sellTokens = 80 ether;
         uint256 sellQuote = _quoteForTokens(sellTokens, priceAfterBuy);
         uint256 sellFee = _fee(sellQuote, FEE_RATE_NO_SUBPAD);
         uint256 sellNet = sellQuote - sellFee;
 
-        assertEq(sellQuote, 800 ether);
-        assertEq(sellFee, 0.8 ether);
-        assertEq(sellNet, 799.2 ether);
+        assertEq(sellQuote, 880 ether);
+        assertEq(sellFee, 0.88 ether);
+        assertEq(sellNet, 879.12 ether);
 
         // 卖出时手续费从交易者持有的报价币划走，合约再支付扣费后的报价币。
         vm.recordLogs();
@@ -555,6 +555,6 @@ contract LaunchCoreFlowTest is Test {
     }
 
     function _curvePrice(uint256 initPrice, uint256 sellSum) internal pure returns (uint256) {
-        return initPrice + sellSum * 30 / 10_000;
+        return initPrice + sellSum * 100 / 10_000;
     }
 }

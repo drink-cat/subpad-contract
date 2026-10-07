@@ -14,8 +14,8 @@ contract LaunchCoreDeploy is Script {
 
     function run() public {
         // 本地链用 ETH_LOCAL_PRIVATE_KEY。切到正式环境时改成 ETH_REAL_PRIVATE_KEY。
-        uint256 deployerPrivateKey = vm.envUint("ETH_LOCAL_PRIVATE_KEY");
-        // uint256 deployerPrivateKey = vm.envUint("ETH_REAL_PRIVATE_KEY");
+        // uint256 deployerPrivateKey = vm.envUint("ETH_LOCAL_PRIVATE_KEY");
+        uint256 deployerPrivateKey = vm.envUint("ETH_REAL_PRIVATE_KEY");
 
         address deployer = vm.addr(deployerPrivateKey);
 
