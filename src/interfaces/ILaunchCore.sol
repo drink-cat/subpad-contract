@@ -88,20 +88,20 @@ interface ILaunchCore {
     );
 
     /// 一次成交。
-    /// tokenAmount 始终为正，方向看 isBuy。
-    /// quoteAmount 是扣费前的报价币，手续费按它计算。
-    /// quoteNet = quoteAmount - fee，是进出池子的报价币。手续费另外从交易者余额划走，不从 quoteNet 里再扣。
+    /// isBuy 为 true 表示买入代币。tokenAmount 始终为正。
+    /// quoteAmount 是扣费前的报价币。fee 是从这笔报价币里扣出的手续费，和报价币同一单位。
+    /// 进出池子的报价币 = quoteAmount - fee。手续费按分成另外从交易者余额转走。
     /// price 是这笔成交使用的曲线价格，sellSum 在成交后才更新，所以事件里的价格不含本笔造成的变化。
     event SwapOnce(
         bytes32 indexed poolId,
         address indexed trader,
-        address indexed token,
         bool isBuy,
+        address indexed token,
         uint256 tokenAmount,
         uint8 tokenDecimal,
         address quoteToken,
         uint256 quoteAmount,
-        uint256 quoteNet,
+        uint256 fee,
         uint8 quoteDecimal,
         uint256 price
     );

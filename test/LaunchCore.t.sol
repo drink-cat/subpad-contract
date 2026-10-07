@@ -14,7 +14,7 @@ import {ILaunchCore, PERCENT_POINT, PRICE_POINT} from "../src/interfaces/ILaunch
 /// 发币、mock 买卖和报价币手续费分成。
 /// 合约通过 ERC1967 代理部署，和正式脚本一致。报价币是 6 位小数的 MockUsdc，项目代币是 18 位。
 /// 无子 pad 费率 0.1%，平台和发币人各一半；有子 pad 费率 0.15%，40% / 40% / 20%。
-/// 发币只能由 owner 调用，所以平台和发币人两笔手续费都进 owner，分成比例用事件核对，子 pad 用余额核对。
+/// 平台费进合约本身，发币人费进 owner，子 pad 费进单独地址。分成比例用事件核对。
 contract LaunchCoreFlowTest is Test {
     uint256 private constant FEE_RATE_NO_SUBPAD = 10;
     uint256 private constant FEE_RATE_WITH_SUBPAD = 15;
@@ -85,8 +85,8 @@ contract LaunchCoreFlowTest is Test {
         assertEq(IERC20(token).balanceOf(trader), buyTokens);
         assertEq(IERC20(token).balanceOf(address(core)), TOTAL_SUPPLY - buyTokens);
         assertEq(usdc.balanceOf(trader), traderQuoteBefore - buyQuote);
-        assertEq(usdc.balanceOf(address(core)), buyNet);
-        assertEq(usdc.balanceOf(owner), buyFee);
+        assertEq(usdc.balanceOf(address(core)), buyNet + buyFee / 2);
+        assertEq(usdc.balanceOf(owner), buyFee / 2);
         _expectTrade(poolId, _fill(token, true, buyTokens, buyQuote, buyNet, INIT_PRICE, buyFee / 2, buyFee / 2, 0));
 
         uint256 sellSumAfterBuy = buyTokens;
@@ -109,8 +109,8 @@ contract LaunchCoreFlowTest is Test {
 
         assertEq(IERC20(token).balanceOf(trader), buyTokens - sellTokens);
         assertEq(usdc.balanceOf(trader), traderQuoteBefore - buyQuote - sellFee + sellNet);
-        assertEq(usdc.balanceOf(address(core)), buyNet - sellNet);
-        assertEq(usdc.balanceOf(owner), buyFee + sellFee);
+        assertEq(usdc.balanceOf(address(core)), buyNet + buyFee / 2 - sellNet + sellFee / 2);
+        assertEq(usdc.balanceOf(owner), buyFee / 2 + sellFee / 2);
         _expectTrade(
             poolId, _fill(token, false, sellTokens, sellQuote, sellNet, priceAfterBuy, sellFee / 2, sellFee / 2, 0)
         );
@@ -137,8 +137,8 @@ contract LaunchCoreFlowTest is Test {
 
         assertEq(IERC20(token).balanceOf(trader), buyTokens);
         assertEq(usdc.balanceOf(trader), traderQuoteBefore - buyQuote);
-        assertEq(usdc.balanceOf(address(core)), buyNet);
-        assertEq(usdc.balanceOf(owner), _share(buyFee, 40) + _share(buyFee, 40));
+        assertEq(usdc.balanceOf(address(core)), buyNet + _share(buyFee, 40));
+        assertEq(usdc.balanceOf(owner), _share(buyFee, 40));
         assertEq(usdc.balanceOf(subpadFeeTo), buyFee - _share(buyFee, 40) - _share(buyFee, 40));
         _expectTrade(
             poolId,
@@ -183,8 +183,8 @@ contract LaunchCoreFlowTest is Test {
 
         assertEq(IERC20(token).balanceOf(trader), buyTokens - sellTokens);
         assertEq(usdc.balanceOf(trader), traderQuoteBefore - sellFee + sellNet);
-        assertEq(usdc.balanceOf(address(core)), coreQuoteBefore - sellNet);
-        assertEq(usdc.balanceOf(owner), ownerQuoteBefore + platformPart * 2);
+        assertEq(usdc.balanceOf(address(core)), coreQuoteBefore - sellNet + platformPart);
+        assertEq(usdc.balanceOf(owner), ownerQuoteBefore + platformPart);
         assertEq(usdc.balanceOf(subpadFeeTo), subpadQuoteBefore + sellFee - platformPart * 2);
     }
 
@@ -221,9 +221,9 @@ contract LaunchCoreFlowTest is Test {
         _swap(poolId, 2000, 0);
 
         _expectTrade(poolId, _fill(token, true, 2000, 2000, 1997, INIT_PRICE, 1, 1, 1));
-        assertEq(usdc.balanceOf(owner), 2);
+        assertEq(usdc.balanceOf(owner), 1);
         assertEq(usdc.balanceOf(subpadFeeTo), 1);
-        assertEq(usdc.balanceOf(address(core)), 1997);
+        assertEq(usdc.balanceOf(address(core)), 1998);
         assertEq(IERC20(token).balanceOf(trader), 2000);
     }
 
@@ -376,7 +376,7 @@ contract LaunchCoreFlowTest is Test {
         uint8 tokenDecimal;
         address quoteToken;
         uint256 quoteAmount;
-        uint256 quoteNet;
+        uint256 fee;
         uint8 quoteDecimal;
         uint256 price;
     }
@@ -420,7 +420,7 @@ contract LaunchCoreFlowTest is Test {
         returns (uint256 swaps)
     {
         bytes32 topic =
-            keccak256("SwapOnce(bytes32,address,address,bool,uint256,uint8,address,uint256,uint256,uint8,uint256)");
+            keccak256("SwapOnce(bytes32,address,bool,address,uint256,uint8,address,uint256,uint256,uint8,uint256)");
         for (uint256 i = 0; i < logs.length; i++) {
             if (logs[i].topics.length != 4 || logs[i].topics[0] != topic || logs[i].topics[1] != poolId) continue;
             SwapLog memory swap = abi.decode(logs[i].data, (SwapLog));
@@ -431,7 +431,7 @@ contract LaunchCoreFlowTest is Test {
             assertEq(swap.tokenDecimal, 18);
             assertEq(swap.quoteToken, address(usdc));
             assertEq(swap.quoteAmount, fill.quoteAmount);
-            assertEq(swap.quoteNet, fill.quoteNet);
+            assertEq(swap.fee, fill.quoteAmount - fill.quoteNet);
             assertEq(swap.quoteDecimal, 6);
             assertEq(swap.price, fill.price);
             swaps++;
@@ -453,7 +453,7 @@ contract LaunchCoreFlowTest is Test {
             assertEq(feeDecimal, 6);
             assertEq(address(uint160(uint256(logs[i].topics[2]))), address(usdc));
             if (decodedType == uint8(ILaunchCore.FeeType.PLATFORM)) {
-                assertEq(feeTo, owner);
+                assertEq(feeTo, address(core));
                 platformFee += feeAmount;
             } else if (decodedType == uint8(ILaunchCore.FeeType.TOKEN_CREATOR)) {
                 assertEq(feeTo, owner);

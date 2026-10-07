@@ -42,24 +42,27 @@ contract LaunchCore is Initializable, OwnableUpgradeable, UUPSUpgradeable, ILaun
     /// 新代币的 owner 是本合约（代理地址），总量铸给本合约。
     /// subpadId == 0：费率 0.1%，平台和发币人各 50%。
     /// subpadId != 0：费率 0.15%，平台 40%、发币人 40%、子 pad 20%。
-    /// 发币人分成记在 msg.sender 上。本函数只能由 owner 调用，所以这两笔目前都进 owner。
+    /// 平台费进本合约，发币人费进 msg.sender。本函数只能由 owner 调用，所以发币人费目前进 owner。
     function createToken(CreateTokenParams calldata params) public onlyOwner {
+        // 部署项目代币。Token 构造函数把 owner 设为调用方，也就是本合约，后面才能 mint。
         Token token = new Token(params.tokenName, params.tokenSymbol);
+        // 总量一次铸进本合约，作为买入时可以转出的库存。
         token.mint(address(this), params.totalSupply);
 
-        // 创建者、代币、报价币三者确定唯一池子。同一 owner 用同一报价币重复发币会得到不同代币地址，因此 poolId 不同。
+        // 创建者、代币、报价币三者确定唯一池子。每次 new 出来的代币地址不同，poolId 不会撞车。
         bytes32 poolId = keccak256(abi.encode(msg.sender, address(token), params.quoteToken));
 
+        // 按有没有子 pad 选择费率和分成。数字是 4 位小数，10000 = 100%。
         uint256 feeRate;
         FeeRule[] memory feeRules;
         if (params.subpadId == 0) {
-            // 费率 10 = 0.1%。分成 5000 = 50%。
+            // 费率 10 = 0.1%。平台、发币人各 5000 = 50%。
             feeRate = 10;
             feeRules = new FeeRule[](2);
             feeRules[0] = FeeRule({feeType: FeeType.PLATFORM, percent: 5000, feeTo: address(this)});
             feeRules[1] = FeeRule({feeType: FeeType.TOKEN_CREATOR, percent: 5000, feeTo: msg.sender});
         } else {
-            // 费率 15 = 0.15%。分成 4000 / 4000 / 2000 = 40% / 40% / 20%。
+            // 费率 15 = 0.15%。平台 4000、发币人 4000、子 pad 2000。
             feeRate = 15;
             feeRules = new FeeRule[](3);
             feeRules[0] = FeeRule({feeType: FeeType.PLATFORM, percent: 4000, feeTo: address(this)});
@@ -67,6 +70,7 @@ contract LaunchCore is Initializable, OwnableUpgradeable, UUPSUpgradeable, ILaun
             feeRules[2] = FeeRule({feeType: FeeType.SUBPAD, percent: 2000, feeTo: params.subpadFeeTo});
         }
 
+        // 写入池子。sellSum 从 0 开始，第一笔成交的价格就是 initPrice。
         PoolInfo storage pool = pools[poolId];
         pool.useMockSwap = params.useMockSwap;
         pool.poolId = poolId;
@@ -78,6 +82,7 @@ contract LaunchCore is Initializable, OwnableUpgradeable, UUPSUpgradeable, ILaun
         pool.subpadId = params.subpadId;
         pool.subpadFeeTo = params.subpadFeeTo;
         pool.feeRate = feeRate;
+        // feeRules 在 storage 里是动态数组，不能整体赋值，只能逐条追加。
         for (uint256 i = 0; i < feeRules.length; i++) {
             pool.feeRules.push(feeRules[i]);
         }
@@ -99,24 +104,30 @@ contract LaunchCore is Initializable, OwnableUpgradeable, UUPSUpgradeable, ILaun
     /// 因此卖出时交易者要自备手续费，报价币净入账 = quoteNet - fee，不是 quoteNet。
     function mockSwap(SwapParams calldata swapParams) public {
         PoolInfo storage pool = pools[swapParams.poolId];
+        // 没建过的池子，token 是零地址。
         require(pool.token != address(0), "Pool not found");
 
-        // 价格在改 sellSum 之前取，本笔成交整笔都用这一个价格。
+        // 先定价再改 sellSum。这一笔买入或卖出全程用同一个价格。
         uint256 currentPrice = pool.getCurrentPrice();
         require(currentPrice > 0, "price");
 
         bool isBuy;
         uint256 tokenAmount;
-        uint256 quoteAmount;
-        uint256 quoteNet;
+        uint256 quoteAmount; // 扣费前的报价币总额，手续费按它算。
+        uint256 quoteNet; // 扣费后剩下的报价币，才是进出池子的金额。
         if (swapParams.tokenAmount != 0) {
+            // 按代币数量成交。两个数量都填了时也走这里，报价币数量被忽略。
+            // 正数是买代币，负数是卖代币。
             isBuy = swapParams.tokenAmount > 0;
             tokenAmount = _abs(swapParams.tokenAmount);
+            // 报价币总额 = 代币数量 * 现价 / 1e18。
             quoteAmount = tokenAmount.mulDivDown(currentPrice, PRICE_POINT);
             quoteNet = _takeQuoteFee(pool, quoteAmount);
         } else if (swapParams.quoteTokenAmount != 0) {
+            // 按报价币总额成交。正数是拿报价币买代币，负数是按这个总额卖出代币。
             isBuy = swapParams.quoteTokenAmount > 0;
             quoteAmount = _abs(swapParams.quoteTokenAmount);
+            // 先扣费，再用剩下的报价币换代币：代币数量 = quoteNet * 1e18 / 现价。
             quoteNet = _takeQuoteFee(pool, quoteAmount);
             tokenAmount = quoteNet.mulDivDown(PRICE_POINT, currentPrice);
         } else {
@@ -126,18 +137,24 @@ contract LaunchCore is Initializable, OwnableUpgradeable, UUPSUpgradeable, ILaun
         IERC20 quoteToken = IERC20(pool.quoteToken);
         IERC20 launchToken = IERC20(pool.token);
         if (isBuy) {
-            // 手续费已经在 _takeQuoteFee 里转走，这里只把扣费后的报价币收进池子。
+            // 手续费已从交易者余额划走。这里只收扣费后的报价币，并把代币转给交易者。
             if (quoteNet > 0) quoteToken.safeTransferFrom(msg.sender, address(this), quoteNet);
             if (tokenAmount > 0) launchToken.safeTransfer(msg.sender, tokenAmount);
+            // 净卖出增加，下一笔的曲线价格变高。
             pool.sellSum += tokenAmount;
         } else {
+            // 只能卖回已经净卖出的数量，不能把初始库存再卖出去。
             require(pool.sellSum >= tokenAmount, "sellSum");
+            // 交易者退回代币，池子付出扣费后的报价币。手续费另外从交易者的报价币余额扣。
             if (tokenAmount > 0) launchToken.safeTransferFrom(msg.sender, address(this), tokenAmount);
             if (quoteNet > 0) quoteToken.safeTransfer(msg.sender, quoteNet);
+            // 净卖出减少，下一笔的曲线价格变低。
             pool.sellSum -= tokenAmount;
         }
 
-        _emitSwapOnce(pool, isBuy, tokenAmount, quoteAmount, quoteNet, currentPrice);
+        // 事件里的价格是本笔开始时的价格，不含 sellSum 刚发生的变化。
+        // fee 是本笔手续费总额。进出池子的报价币是 quoteAmount - fee，不再单独放进事件。
+        _emitSwapOnce(pool, isBuy, tokenAmount, quoteAmount, quoteAmount - quoteNet, currentPrice);
     }
 
     /// 发出 SwapOnce。单独成函数，避免 mockSwap 里局部变量过多导致栈太深。
@@ -147,19 +164,19 @@ contract LaunchCore is Initializable, OwnableUpgradeable, UUPSUpgradeable, ILaun
         bool isBuy,
         uint256 tokenAmount,
         uint256 quoteAmount,
-        uint256 quoteNet,
+        uint256 fee,
         uint256 price
     ) private {
         emit SwapOnce(
             pool.poolId,
             msg.sender,
-            pool.token,
             isBuy,
+            pool.token,
             tokenAmount,
             IERC20Metadata(pool.token).decimals(),
             pool.quoteToken,
             quoteAmount,
-            quoteNet,
+            fee,
             IERC20Metadata(pool.quoteToken).decimals(),
             price
         );
@@ -171,19 +188,25 @@ contract LaunchCore is Initializable, OwnableUpgradeable, UUPSUpgradeable, ILaun
     /// 除最后一条规则外都向下取整。最后一条拿走 fee - 已分配，保证分成之和等于手续费，尘埃不会留在交易者或合约里。
     /// 某一条分成为 0 时跳过转账，也不发 FeeCharged。
     function _takeQuoteFee(PoolInfo storage pool, uint256 quoteAmount) private returns (uint256 quoteNet) {
+        // 手续费 = 报价币总额 * 费率 / 10000，向下取整。费率为 0 或总额太小时，fee 可以是 0。
         uint256 fee = quoteAmount.mulDivDown(pool.feeRate, PERCENT_POINT);
         uint256 distributed;
+        // 小数位只写进事件，方便链下换算，不参与分成计算。
         uint8 feeDecimal = IERC20Metadata(pool.quoteToken).decimals();
         IERC20 quoteToken = IERC20(pool.quoteToken);
         uint256 ruleCount = pool.feeRules.length;
         for (uint256 i = 0; i < ruleCount; i++) {
             FeeRule storage rule = pool.feeRules[i];
+            // 前面的规则按比例向下取整。最后一条拿走还没分掉的部分，分成之和才等于 fee。
             uint256 part = i + 1 == ruleCount ? fee - distributed : fee.mulDivDown(rule.percent, PERCENT_POINT);
             distributed += part;
+            // 这一条分到 0，就不转账，也不发事件。
             if (part == 0) continue;
+            // 从交易者的报价币余额直接转给收款地址，不经过池子。
             quoteToken.safeTransferFrom(msg.sender, rule.feeTo, part);
             emit FeeCharged(pool.poolId, rule.feeType, pool.quoteToken, feeDecimal, part, rule.feeTo);
         }
+        // 调用方用这个余额去收币或付币，里面已经不含手续费。
         quoteNet = quoteAmount - fee;
     }
 
