@@ -7,6 +7,8 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {LaunchCore} from "../src/LaunchCore.sol";
 import {MockUsdc} from "../src/MockUsdc.sol";
 import {ILaunchCore, PERCENT_POINT, PRICE_POINT} from "../src/interfaces/ILaunchCore.sol";
@@ -62,6 +64,33 @@ contract LaunchCoreFlowTest is Test {
         vm.prank(trader);
         vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, trader));
         core.createToken(_params("Nope", "NO", 0, address(0)));
+    }
+
+    /// 暂停后不能发币、不能成交。恢复后可以继续买。没有 PAUSER_ROLE 不能暂停。
+    function test_pause_blocksCreateAndSwap() public {
+        (bytes32 poolId, address token) = _createToken("Pause", "PAUSE", 0, address(0));
+        _approveTrader(token);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, trader, core.PAUSER_ROLE())
+        );
+        vm.prank(trader);
+        core.pause();
+
+        vm.prank(owner);
+        core.pause();
+
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        vm.prank(owner);
+        core.createToken(_params("Later", "LATE", 0, address(0)));
+
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        _swap(poolId, 1 ether, 0);
+
+        vm.prank(owner);
+        core.unpause();
+        _swap(poolId, 1 ether, 0);
+        assertEq(IERC20(token).balanceOf(trader), 1 ether);
     }
 
     /// 无子 pad：费率 0.1%，平台和创建者各 50%。先按代币数量买入，再卖出一部分。

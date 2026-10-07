@@ -5,7 +5,10 @@ import {FixedPointMathLib} from "@solmate/utils/FixedPointMathLib.sol";
 import {Token} from "./Token.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -16,10 +19,21 @@ import {PoolInfoLib} from "./libraries/PoolInfoLib.sol";
 /// 通过 UUPS 代理使用：实现合约构造时关掉初始化，真正的 owner 在代理的 initialize 里设置。
 /// 代币总量铸在本合约里。用户买入时合约付出代币、收进扣费后的报价币；卖出时方向相反。
 /// 手续费始终从交易者的报价币余额转给分成地址，不从池子库存里扣。
-contract LaunchCore is Initializable, OwnableUpgradeable, UUPSUpgradeable, ILaunchCore {
+contract LaunchCore is
+    Initializable,
+    OwnableUpgradeable,
+    AccessControlUpgradeable,
+    PausableUpgradeable,
+    UUPSUpgradeable,
+    ReentrancyGuard,
+    ILaunchCore
+{
     using PoolInfoLib for PoolInfo;
     using FixedPointMathLib for uint256;
     using SafeERC20 for IERC20;
+
+    /// 可以暂停和恢复。管理员角色仍是 owner，用来把这个角色转给别人。
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     /// poolId => 池子。poolId = keccak256(abi.encode(创建者, 代币地址, 报价币地址))。
     mapping(bytes32 poolId => PoolInfo) public pools;
@@ -33,6 +47,31 @@ contract LaunchCore is Initializable, OwnableUpgradeable, UUPSUpgradeable, ILaun
     /// 代理部署时调用一次，把 initialOwner 设为管理员。发币和升级都只允许这个地址。
     function initialize(address initialOwner) public initializer {
         __Ownable_init(initialOwner);
+        __AccessControl_init();
+        __Pausable_init();
+        _grantSecurityRoles(initialOwner);
+    }
+
+    /// 旧代理已经跑过 initialize 时，由 owner 再调用一次，补上暂停角色。
+    /// 重复调用只是再次授权，不会改发币和成交逻辑。
+    function initSecurity() public onlyOwner {
+        _grantSecurityRoles(owner());
+    }
+
+    /// 暂停发币和成交。已经暂停时会回退。
+    function pause() public onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    /// 恢复发币和成交。
+    function unpause() public onlyRole(PAUSER_ROLE) {
+        _unpause();
+    }
+
+    /// owner 同时是角色管理员和暂停人，之后可以用 grantRole 把暂停权交给别人。
+    function _grantSecurityRoles(address account) private {
+        _grantRole(DEFAULT_ADMIN_ROLE, account);
+        _grantRole(PAUSER_ROLE, account);
     }
 
     /// UUPS 升级入口的权限检查。新实现地址由 owner 通过 upgradeToAndCall 传入。
@@ -43,7 +82,7 @@ contract LaunchCore is Initializable, OwnableUpgradeable, UUPSUpgradeable, ILaun
     /// subpadId == 0：费率 0.1%，平台和发币人各 50%。
     /// subpadId != 0：费率 0.15%，平台 40%、发币人 40%、子 pad 20%。
     /// 平台费进本合约，发币人费进 msg.sender。本函数只能由 owner 调用，所以发币人费目前进 owner。
-    function createToken(CreateTokenParams calldata params) public onlyOwner {
+    function createToken(CreateTokenParams calldata params) public onlyOwner whenNotPaused {
         // 部署项目代币。Token 构造函数把 owner 设为调用方，也就是本合约，后面才能 mint。
         Token token = new Token(params.tokenName, params.tokenSymbol);
         // 总量一次铸进本合约，作为买入时可以转出的库存。
@@ -102,7 +141,7 @@ contract LaunchCore is Initializable, OwnableUpgradeable, UUPSUpgradeable, ILaun
     ///
     /// 手续费在上面两种情况里都是另外从交易者的报价币余额转走。
     /// 因此卖出时交易者要自备手续费，报价币净入账 = quoteNet - fee，不是 quoteNet。
-    function mockSwap(SwapParams calldata swapParams) public {
+    function mockSwap(SwapParams calldata swapParams) public nonReentrant whenNotPaused {
         PoolInfo storage pool = pools[swapParams.poolId];
         // 没建过的池子，token 是零地址。
         require(pool.token != address(0), "Pool not found");
