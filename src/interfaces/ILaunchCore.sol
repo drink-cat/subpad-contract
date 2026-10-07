@@ -11,6 +11,7 @@ uint256 constant FEE_POINT = PERCENT_POINT;
 
 interface ILaunchCore {
     struct CreateTokenParams {
+        bool useMockSwap; // 是否使用mock swap。
         string tokenName;
         string tokenSymbol;
         uint256 tokenDecimals;
@@ -21,12 +22,19 @@ interface ILaunchCore {
         address subpadFeeTo; // 子pad 费用接收地址。
     }
 
+    struct SwapParams {
+        bytes32 poolId;
+        int256 tokenAmount; // 正数=买。负数=卖。0=无。
+        int256 quoteTokenAmount; // 正数=买。负数=卖。0=无。
+    }
+
     struct PoolInfo {
+        bool useMockSwap; // 是否使用mock swap。
         bytes32 poolId;
         address creator;
         address token;
         address quoteToken;
-        uint256 initPrice;
+        uint256 initPrice; // PRICE_POINT
         uint256 sellSum; // 卖出的数量。 价格与数量有关。
         uint256 subpadId; // 子pad id。 0 表示没有子pad。
         address subpadFeeTo; // 子pad 费用接收地址。
@@ -58,7 +66,7 @@ interface ILaunchCore {
         uint256 launchSupply,
         int24 tickSpacing
     );
-    event FeeInfo(
+    event FeeCharged(
         bytes32 indexed poolId,
         FeeType feeType,
         address indexed feeToken,
