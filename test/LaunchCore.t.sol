@@ -41,7 +41,9 @@ contract LaunchCoreFlowTest is Test {
 
     /// 无子 pad 发币：总量在代理合约里，池子费率为 0.1%，卖出量从 0 开始。
     function test_createToken_withoutSubpad() public {
+        vm.recordLogs();
         (bytes32 poolId, address token) = _createToken("NoPad", "NPAD", 0, address(0));
+        _assertTokenCreated(poolId, token, "NoPad", "NPAD", TOTAL_SUPPLY);
 
         assertEq(IERC20Metadata(token).name(), "NoPad");
         assertEq(IERC20Metadata(token).symbol(), "NPAD");
@@ -288,6 +290,48 @@ contract LaunchCoreFlowTest is Test {
 
         vm.expectRevert(bytes("sellSum"));
         _swap(poolId, -101 ether, 0);
+    }
+
+    /// 核对 TokenCreated。报价币符号来自 MockUsdc，tickSpacing 固定为 0。
+    function _assertTokenCreated(
+        bytes32 poolId,
+        address token,
+        string memory name,
+        string memory symbol,
+        uint256 launchSupply
+    ) internal view {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 topic = keccak256("TokenCreated(bytes32,address,address,string,string,address,string,uint256,int24)");
+        uint256 matches;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics.length != 4 || logs[i].topics[0] != topic) continue;
+            assertEq(logs[i].topics[1], poolId);
+            assertEq(address(uint160(uint256(logs[i].topics[2]))), owner);
+            assertEq(address(uint160(uint256(logs[i].topics[3]))), token);
+            _checkTokenCreatedData(logs[i].data, name, symbol, launchSupply);
+            matches++;
+        }
+        assertEq(matches, 1);
+    }
+
+    function _checkTokenCreatedData(bytes memory data, string memory name, string memory symbol, uint256 launchSupply)
+        internal
+        view
+    {
+        (
+            string memory tokenName,
+            string memory tokenSymbol,
+            address quoteToken,
+            string memory quoteSymbol,
+            uint256 supply,
+            int24 tickSpacing
+        ) = abi.decode(data, (string, string, address, string, uint256, int24));
+        assertEq(tokenName, name);
+        assertEq(tokenSymbol, symbol);
+        assertEq(quoteToken, address(usdc));
+        assertEq(quoteSymbol, "MockUSDC");
+        assertEq(supply, launchSupply);
+        assertEq(tickSpacing, 0);
     }
 
     /// 用代理当前 nonce 预测即将创建的代币地址，发币后再用创建者、代币、报价币算出 poolId。

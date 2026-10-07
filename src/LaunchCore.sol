@@ -125,6 +125,19 @@ contract LaunchCore is
         for (uint256 i = 0; i < feeRules.length; i++) {
             pool.feeRules.push(feeRules[i]);
         }
+
+        // 池子写完再发事件。报价币符号从报价币合约读取。模拟曲线没有 tick，tickSpacing 记 0。
+        emit TokenCreated(
+            poolId,
+            msg.sender,
+            address(token),
+            params.tokenName,
+            params.tokenSymbol,
+            params.quoteToken,
+            IERC20Metadata(params.quoteToken).symbol(),
+            params.totalSupply,
+            0
+        );
     }
 
     /// 按当前曲线价格模拟一笔成交。谁都可以调用，调用前须把相关代币 approve 给本合约。

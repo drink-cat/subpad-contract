@@ -63,7 +63,7 @@ interface ILaunchCore {
         address feeTo; // 这笔分成的收款地址。
     }
 
-    /// 发币事件。接口已定义，createToken 当前还没有 emit。
+    /// 发币并建池之后发出。tickSpacing 目前固定为 0，模拟曲线不用 Uniswap 的 tick。
     event TokenCreated(
         bytes32 indexed poolId,
         address indexed creator,
