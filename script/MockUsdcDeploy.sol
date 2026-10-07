@@ -6,10 +6,12 @@ import {MockUsdc} from "../src/MockUsdc.sol";
 // import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {console} from "forge-std/console.sol";
 
+/// 部署测试用报价币。不是代理，部署者就是 MockUsdc 的 owner，可以用 mint 给地址打币。
 contract MockUsdcDeploy is Script {
     function setUp() public {}
 
     function run() public {
+        // 本地链用 ETH_LOCAL_PRIVATE_KEY。切到正式环境时改成 ETH_REAL_PRIVATE_KEY。
         uint256 deployerPrivateKey = vm.envUint("ETH_LOCAL_PRIVATE_KEY");
         // uint256 deployerPrivateKey = vm.envUint("ETH_REAL_PRIVATE_KEY");
 
